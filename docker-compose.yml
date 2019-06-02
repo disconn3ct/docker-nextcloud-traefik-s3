@@ -1,0 +1,132 @@
+version: '3.3'
+
+services:
+  db:
+    image: postgres:alpine
+    restart: always
+    read_only: true
+    deploy:
+      resources:
+        limits:
+          memory: 100M
+          cpus: "2"
+        reservations:
+          memory: 50M
+          cpus: ".5"
+      labels:
+        traefik.enable: "false"
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg-root-password
+    volumes:
+      - type: tmpfs
+        target: /tmp
+      - type: tmpfs
+        target: /run/postgresql
+      - pgdata:/var/lib/postgresql/data
+    secrets:
+      - pg-root-password
+    networks:
+      - database
+
+  redis:
+    image: redis:alpine
+    restart: always
+    read_only: true
+    deploy:
+      resources:
+        limits:
+          memory: 30m
+          cpus: "1"
+        reservations:
+          memory: 10m
+          cpus: ".1"
+      labels:
+        traefik.enable: "false"
+    volumes:
+      - type: tmpfs
+        target: /tmp
+    networks:
+      - database
+
+  app:
+    image: nextcloud:fpm-alpine
+    restart: always
+    #read_only: true
+    # Writes a single file to /usr/local/etc/php/conf.d for redis
+    deploy:
+      resources:
+        limits:
+          memory: 250m
+          cpus: "4"
+        reservations:
+          memory: 50m
+          cpus: ".25"
+      labels:
+        traefik.enable: "false"
+    environment:
+      REDIS_HOST: redis
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - nextcloud:/var/www/html
+      - type: tmpfs
+        target: /tmp
+      - type: bind
+        source: ./config.d/s3.config.php
+        target: /var/www/html/config/s3.config.php
+        read_only: true
+    networks:
+      - database
+
+  web:
+    image: nginx:stable-alpine
+    read_only: true
+    restart: always
+    depends_on:
+      - app
+    deploy:
+      resources:
+        limits:
+          memory: 20M
+          cpus: "0.25"
+        reservations:
+          memory: 5M
+          cpus: "0.1"
+      labels:
+        traefik.enable: "true"
+        traefik.frontend.rule: "${TR_FRONT}"
+        traefik.frontend.entryPoints: "https"
+        traefik.backend: "nextcloud-web"
+        traefik.port: 80
+        traefik.docker.network: "traefik-public"
+        traefik.backend.loadbalancer.stickiness: "true"
+    volumes:
+      - type: tmpfs
+        target: /run
+      - type: tmpfs
+        target: /var/cache/nginx
+      - type: tmpfs
+        target: /tmp
+      - type: bind
+        source: nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+      - nextcloud:/var/www/html:ro
+    networks:
+      - database
+      - traefik-public
+
+volumes:
+  nextcloud:
+  pgdata:
+
+networks:
+  traefik-public:
+    external: true
+  database:
+    driver: overlay
+
+secrets:
+  pg-root-password:
+    file: ./.pgroot
