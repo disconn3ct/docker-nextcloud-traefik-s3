@@ -1,33 +1,6 @@
 version: '3.3'
 
 services:
-  db:
-    image: postgres:alpine
-    restart: always
-    read_only: true
-    deploy:
-      resources:
-        limits:
-          memory: 100M
-          cpus: "2"
-        reservations:
-          memory: 50M
-          cpus: ".5"
-      labels:
-        traefik.enable: "false"
-    environment:
-      POSTGRES_PASSWORD_FILE: /run/secrets/pg-root-password
-    volumes:
-      - type: tmpfs
-        target: /tmp
-      - type: tmpfs
-        target: /run/postgresql
-      - pgdata:/var/lib/postgresql/data
-    secrets:
-      - pg-root-password
-    networks:
-      - database
-
   redis:
     image: redis:alpine
     restart: always
@@ -48,8 +21,37 @@ services:
     networks:
       - database
 
+  nextdb:
+    image: postgres:alpine
+    restart: always
+    read_only: true
+    deploy:
+      resources:
+        limits:
+          memory: 100M
+          cpus: "2"
+        reservations:
+          memory: 50M
+          cpus: ".5"
+      labels:
+        traefik.enable: "false"
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg-root-password
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - type: tmpfs
+        target: /run/postgresql
+      - type: tmpfs
+        target: /tmp
+      - pgdata:/var/lib/postgresql/data
+    secrets:
+      - pg-root-password
+    networks:
+      - database
+
   app:
-    image: nextcloud:fpm-alpine
+    image: nextcloud:fpm
     restart: always
     #read_only: true
     # Writes a single file to /usr/local/etc/php/conf.d for redis
@@ -57,25 +59,43 @@ services:
       resources:
         limits:
           memory: 250m
-          cpus: "4"
+          cpus: "2"
         reservations:
           memory: 50m
           cpus: ".25"
       labels:
         traefik.enable: "false"
     environment:
+      ENV_SECRETS_DEBUG: 1
+      NEXTCLOUD_ADMIN_PASSWORD_FILE: /run/secrets/nextcloud-admin-password
+      NEXTCLOUD_ADMIN_USER: docker
+      NEXTCLOUD_UPDATE: 1
+      POSTGRES_DB: nextcloud
+      POSTGRES_HOST: nextdb
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg-root-password
+      POSTGRES_USER: postgres
       REDIS_HOST: redis
+    command:
+      - /usr/bin/env
+      - bash
+      - /run/secrets/secrets-cmd-v1
+      - php-fpm
     depends_on:
       - db
       - redis
+    secrets:
+      - secrets-cmd-v1
+      - pg-root-password
+      - nextcloud-admin-password
     volumes:
       - nextcloud:/var/www/html
+      - nextcloud_config:/var/www/html/config
       - type: tmpfs
         target: /tmp
-      - type: bind
-        source: ./config.d/s3.config.php
-        target: /var/www/html/config/s3.config.php
-        read_only: true
+    # FIXME: This breaks config, so find a new way.
+    # configs:
+    #  - source: s3_config
+    #    target: /var/www/html/config/s3.config.php
     networks:
       - database
 
@@ -94,13 +114,15 @@ services:
           memory: 5M
           cpus: "0.1"
       labels:
+        traefik.backend: "web"
+        traefik.docker.network: "traefik-public"
         traefik.enable: "true"
         traefik.frontend.rule: "${TR_FRONT}"
-        traefik.frontend.entryPoints: "https"
-        traefik.backend: "nextcloud-web"
         traefik.port: 80
-        traefik.docker.network: "traefik-public"
-        traefik.backend.loadbalancer.stickiness: "true"
+        traefik.redirectorservice.frontend.entryPoints: "http"
+        traefik.redirectorservice.frontend.redirect.entryPoint: "https"
+        traefik.tags: "traefik-public"
+        traefik.webservice.frontend.entryPoints: "https"
     volumes:
       - type: tmpfs
         target: /run
@@ -113,12 +135,14 @@ services:
         target: /etc/nginx/nginx.conf
         read_only: true
       - nextcloud:/var/www/html:ro
+      - nextcloud_config:/var/www/html/config:ro
     networks:
       - database
       - traefik-public
 
 volumes:
   nextcloud:
+  nextcloud_config:
   pgdata:
 
 networks:
@@ -129,4 +153,12 @@ networks:
 
 secrets:
   pg-root-password:
-    file: ./.pgroot
+    file: secrets/.pgroot
+  secrets-cmd-v1:
+    file: ./secrets.sh
+  nextcloud-admin-password:
+    file: secrets/.ncroot
+
+configs:
+  s3_config:
+    file: ./config.d/s3.config.php

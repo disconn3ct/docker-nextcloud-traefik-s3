@@ -6,4 +6,4 @@ set -eu -o pipefail
 # $ env DOMAIN=mydomain.com ./deploy.sh
 
 # This should Just Work but it probably won't.
-env TR_FRONT="Host:nextcloud.${DOMAIN:-mydomain.com}" docker stack deploy -c docker-compose.yml nextcloud --prune
+env TR_FRONT="Host: nextcloud.${DOMAIN}" docker stack deploy -c docker-compose.yml nextcloud --prune
